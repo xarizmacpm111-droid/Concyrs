@@ -10,7 +10,6 @@ from telebot import types
 # --- КОНФИГУРАЦИЯ ---
 TOKEN = os.getenv('BOT_TOKEN')
 LAVA_SECRET_KEY = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1aWQiOiIwMDYyYTFmYy1mZmUzLTg3NjQtYzBmYi05YThmZjJiNmJlYzYiLCJ0aWQiOiJiOGU0ZTU4MS1lNGVmLWI3Y2ItM2U1Mi1mZGZjYjJmMjFiYzIifQ.dGr0qonEHDEA2IH0PnF_P4yWg8Po86HwOH-u02JxJgo'
-' 
 WALLET_ID = 'R11597472' 
 
 user_balances = {}
