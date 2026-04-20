@@ -1,26 +1,23 @@
 import os
-import logging
+import telebot
 import hashlib
 import hmac
-import aiohttp
+import requests
 from flask import Flask
 from threading import Thread
-from aiogram import Bot, Dispatcher, types, executor
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot import types
 
 # --- КОНФИГУРАЦИЯ ---
-TOKEN = os.getenv('BOT_TOKEN') # Вставляем в Render
-LAVA_SECRET_KEY = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1aWQiOiIwMDYyYTFmYy1mZmUzLTg3NjQtYzBmYi05YThmZjJiNmJlYzYiLCJ0aWQiOiJiOGU0ZTU4MS1lNGVmLWI3Y2ItM2U1Mi1mZGZjYjJmMjFiYzIifQ.dGr0qonEHDEA2IH0PnF_P4yWg8Po86HwOH-u02JxJgo
-' 
+TOKEN = os.getenv('BOT_TOKEN')
+LAVA_SECRET_KEY = 'ВСТАВЬ_СЮДА_СВОЙ_API_КЛЮЧ' 
 WALLET_ID = 'R11597472' 
 
-# Временное хранилище баланса (сбросится при перезагрузке Render)
 user_balances = {}
 
-# --- FLASK (ДЛЯ ПИНГА И РАБОТЫ ПОРТА) ---
+# --- FLASK ДЛЯ ПИНГА ---
 app = Flask('')
 @app.route('/')
-def home(): return "LEVEL Bot Online"
+def home(): return "LEVEL Bot (Telebot) Online"
 
 def run():
     port = int(os.environ.get("PORT", 10000))
@@ -29,71 +26,71 @@ def run():
 Thread(target=run, daemon=True).start()
 
 # --- ЛОГИКА БОТА ---
-bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
-logging.basicConfig(level=logging.INFO)
+bot = telebot.TeleBot(TOKEN)
 
-# 1. Создание счета
-async def create_lava_invoice(user_id, amount):
+# 1. Создание счета (через requests)
+def create_lava_invoice(user_id, amount):
     url = 'https://api.lava.ru/business/invoice/create'
     data = {"sum": amount, "walletId": WALLET_ID, "comment": f"user_{user_id}"}
-    # Подпись для безопасности
     sign_str = f"{amount}:{WALLET_ID}"
     sign = hmac.new(LAVA_SECRET_KEY.encode(), sign_str.encode(), hashlib.sha256).hexdigest()
     
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=data, headers={'Authorization': sign}) as resp:
-            res = await resp.json()
-            if res.get('status') in [200, 201]:
-                return res['data']['url'], res['data']['id']
-            return None, None
+    try:
+        resp = requests.post(url, json=data, headers={'Authorization': sign}, timeout=10)
+        res = resp.json()
+        if res.get('status') in [200, 201]:
+            return res['data']['url'], res['data']['id']
+    except:
+        pass
+    return None, None
 
-# 2. Проверка статуса счета
-async def check_lava_status(invoice_id):
+# 2. Проверка статуса
+def check_lava_status(invoice_id):
     url = 'https://api.lava.ru/business/invoice/status'
     data = {"invoiceId": invoice_id, "walletId": WALLET_ID}
     sign_str = f"{invoice_id}:{WALLET_ID}"
     sign = hmac.new(LAVA_SECRET_KEY.encode(), sign_str.encode(), hashlib.sha256).hexdigest()
     
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=data, headers={'Authorization': sign}) as resp:
-            res = await resp.json()
-            # Проверяем, что статус именно 'success'
-            return res.get('data', {}).get('status') == 'success'
+    try:
+        resp = requests.post(url, json=data, headers={'Authorization': sign}, timeout=10)
+        res = resp.json()
+        return res.get('data', {}).get('status') == 'success'
+    except:
+        return False
 
-@dp.message_handler(commands=['start'])
-async def cmd_start(message: types.Message):
+@bot.message_handler(commands=['start'])
+def start(message):
     uid = message.from_user.id
     balance = user_balances.get(uid, 0)
-    kb = InlineKeyboardMarkup().add(InlineKeyboardButton("Пополнить баланс на 100₽", callback_data="buy_100"))
-    await message.answer(f"👋 Привет, {message.from_user.first_name}!\n💰 Твой баланс: {balance} руб.", reply_markup=kb)
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Пополнить на 100₽", callback_data="buy_100"))
+    bot.send_message(message.chat.id, f"👋 Привет!\n💰 Твой баланс: {balance} руб.", reply_markup=kb)
 
-@dp.callback_query_handler(text="buy_100")
-async def buy_handler(callback: types.CallbackQuery):
-    await callback.answer("Создаю ссылку...")
-    url, inv_id = await create_lava_invoice(callback.from_user.id, 100)
+@bot.callback_query_handler(func=lambda call: call.data == "buy_100")
+def buy_callback(call):
+    bot.answer_callback_query(call.id, "Создаю ссылку...")
+    url, inv_id = create_lava_invoice(call.from_user.id, 100)
     
     if url:
-        kb = InlineKeyboardMarkup(row_width=1)
+        kb = types.InlineKeyboardMarkup(row_width=1)
         kb.add(
-            InlineKeyboardButton("🔗 Перейти к оплате (100₽)", url=url),
-            InlineKeyboardButton("🔄 Я оплатил (Проверить)", callback_data=f"check_{inv_id}")
+            types.InlineKeyboardButton("🔗 Оплатить (100₽)", url=url),
+            types.InlineKeyboardButton("🔄 Проверить оплату", callback_data=f"check_{inv_id}")
         )
-        await callback.message.answer("Оплати счет по ссылке, затем нажми кнопку проверки:", reply_markup=kb)
+        bot.send_message(call.message.chat.id, "Оплатите и нажмите кнопку ниже:", reply_markup=kb)
     else:
-        await callback.message.answer("❌ Ошибка API. Убедись, что ключ в коде верный.")
+        bot.send_message(call.message.chat.id, "❌ Ошибка API Lava.")
 
-@dp.callback_query_handler(lambda c: c.data.startswith('check_'))
-async def check_handler(callback: types.CallbackQuery):
-    inv_id = callback.data.split('_')[1]
-    is_paid = await check_lava_status(inv_id)
-    
-    if is_paid:
-        uid = callback.from_user.id
+@bot.callback_query_handler(func=lambda call: call.data.startswith('check_'))
+def check_callback(call):
+    inv_id = call.data.split('_')[1]
+    if check_lava_status(inv_id):
+        uid = call.from_user.id
         user_balances[uid] = user_balances.get(uid, 0) + 100
-        await callback.message.edit_text(f"✅ Оплата подтверждена!\n💰 Твой новый баланс: {user_balances[uid]} руб.")
+        bot.edit_message_text(f"✅ Баланс пополнен! Теперь: {user_balances[uid]} руб.", 
+                              call.message.chat.id, call.message.message_id)
     else:
-        await callback.answer("❌ Оплата еще не найдена. Попробуй через 30-60 секунд.", show_alert=True)
+        bot.answer_callback_query(call.id, "❌ Оплата не найдена", show_alert=True)
 
 if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+    bot.infinity_polling()
