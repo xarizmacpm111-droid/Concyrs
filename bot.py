@@ -9,7 +9,8 @@ from telebot import types
 
 # --- КОНФИГУРАЦИЯ ---
 TOKEN = os.getenv('BOT_TOKEN')
-LAVA_SECRET_KEY = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1aWQiOiIwMDYyYTFmYy1mZmUzLTg3NjQtYzBmYi05YThmZjJiNmJlYzYiLCJ0aWQiOiJlOGRhZDZiNy00MmE5LWJkZmUtMzdmNy04N2Q4MTE4ODNiNmQifQ.8-Qk2yDIaowt-3bjjO1rMl8f9h2SJh_qV8jBPgXbWxc'
+# Вставь свой ключ внутри кавычек, БЕЗ переносов строк
+LAVA_SECRET_KEY = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1aWQiOiIwMDYyYTFmYy1mZmUzLTg3NjQtYzBmYi05YThmZjJiNmJlYzYiLCJ0aWQiOiJlOGRhZDZiNy00MmE5LWJkZmUtMzdmNy04N2Q4MTE4ODNiNmQifQ.8-Qk2yDIaowt-3bjjO1rMl8f9h2SJh_qV8jBPgXbWxc' 
 WALLET_ID = 'R11597472' 
 
 user_balances = {}
@@ -17,7 +18,7 @@ user_balances = {}
 # --- FLASK ДЛЯ ПИНГА ---
 app = Flask('')
 @app.route('/')
-def home(): return "LEVEL Bot (Telebot) Online"
+def home(): return "LEVEL Bot is Online"
 
 def run():
     port = int(os.environ.get("PORT", 10000))
@@ -28,33 +29,52 @@ Thread(target=run, daemon=True).start()
 # --- ЛОГИКА БОТА ---
 bot = telebot.TeleBot(TOKEN)
 
-# 1. Создание счета (через requests)
 def create_lava_invoice(user_id, amount):
     url = 'https://api.lava.ru/business/invoice/create'
-    data = {"sum": amount, "walletId": WALLET_ID, "comment": f"user_{user_id}"}
+    amount = float(amount)
+    
+    # Очистка ключа
+    clean_key = LAVA_SECRET_KEY.strip().replace('\n', '').replace('\r', '').replace(' ', '')
+    
+    data = {
+        "sum": amount,
+        "walletId": WALLET_ID,
+        "comment": f"user_{user_id}"
+    }
+    
+    # Формируем подпись: сумма:кошелек (самый частый стандарт Lava)
     sign_str = f"{amount}:{WALLET_ID}"
-    sign = hmac.new(LAVA_SECRET_KEY.encode(), sign_str.encode(), hashlib.sha256).hexdigest()
+    sign = hmac.new(clean_key.encode(), sign_str.encode(), hashlib.sha256).hexdigest()
     
     try:
-        resp = requests.post(url, json=data, headers={'Authorization': sign}, timeout=10)
+        headers = {
+            'Authorization': sign,
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
+        resp = requests.post(url, json=data, headers=headers, timeout=15)
         res = resp.json()
-        if res.get('status') in [200, 201]:
+        
+        # Печатаем в логи Render для проверки
+        print(f"DEBUG LAVA: {res}")
+        
+        if res.get('status') in [200, 201, 'success']:
             return res['data']['url'], res['data']['id']
-    except:
-        pass
+    except Exception as e:
+        print(f"ERROR: {e}")
     return None, None
 
-# 2. Проверка статуса
 def check_lava_status(invoice_id):
     url = 'https://api.lava.ru/business/invoice/status'
+    clean_key = LAVA_SECRET_KEY.strip().replace('\n', '').replace('\r', '').replace(' ', '')
+    
     data = {"invoiceId": invoice_id, "walletId": WALLET_ID}
     sign_str = f"{invoice_id}:{WALLET_ID}"
-    sign = hmac.new(LAVA_SECRET_KEY.encode(), sign_str.encode(), hashlib.sha256).hexdigest()
+    sign = hmac.new(clean_key.encode(), sign_str.encode(), hashlib.sha256).hexdigest()
     
     try:
         resp = requests.post(url, json=data, headers={'Authorization': sign}, timeout=10)
-        res = resp.json()
-        return res.get('data', {}).get('status') == 'success'
+        return resp.json().get('data', {}).get('status') == 'success'
     except:
         return False
 
@@ -77,9 +97,9 @@ def buy_callback(call):
             types.InlineKeyboardButton("🔗 Оплатить (100₽)", url=url),
             types.InlineKeyboardButton("🔄 Проверить оплату", callback_data=f"check_{inv_id}")
         )
-        bot.send_message(call.message.chat.id, "Оплатите и нажмите кнопку ниже:", reply_markup=kb)
+        bot.send_message(call.message.chat.id, "Оплатите счет и нажмите кнопку ниже:", reply_markup=kb)
     else:
-        bot.send_message(call.message.chat.id, "❌ Ошибка API Lava.")
+        bot.send_message(call.message.chat.id, "❌ Ошибка API. Проверь логи Render.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('check_'))
 def check_callback(call):
